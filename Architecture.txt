@@ -1,0 +1,40 @@
+Architecture
+New folder/
+├── app.py
+├── .env
+├── requirements.txt
+├── vectorstore.py
+├── config/
+│   └── constants.py
+├── core/
+│   ├── api_client.py
+│   ├── context_assembler.py
+│   ├── faiss_utils.py
+│   ├── context_block_builder.py
+│   └── fact_extractor.py
+├── data/
+│   ├── facts.json
+│   └── memory.jsonl
+├── memory/
+│   ├──session_summarizer.py
+│   ├──long_term_memory.py
+│   ├── context_retriever.py
+│   ├── fact_memory.py
+│   └── turn_memory.py
+├── persona/
+│   ├── mood_adjustments.json
+│   ├── relationship_status.py
+│   ├── mood_tracker.py
+│   ├── hormone_adjuster.py
+│   ├── hormone_api.py
+│   ├── emotion_nsfw_checker.py
+│   ├── update_tiny_model_state.py
+│   ├── tiny_model_writer.py
+│   ├── update_faiss_memory_state.py
+│   ├── faiss_memory_writer.py
+│   ├── persona.json
+│   └── personality.json
+└── utils/
+    ├── __pycache__/
+    ├── session_id.py
+    └── ui_helpers.py

@@ -1,0 +1,678 @@
+Architecture
+New folder/
+├── app.py
+├── .env
+├── requirements.txt
+├── vectorstore.py
+├── config/
+│   └── constants.py
+├── core/
+│   ├── api_client.py
+│   ├── context_assembler.py
+│   ├── faiss_utils.py
+│   ├── context_block_builder.py
+│   └── fact_extractor.py
+├── data/
+│   ├── facts.json
+│   └── memory.jsonl
+├── memory/
+│   ├──session_summarizer.py
+│   ├──long_term_memory.py
+│   ├── context_retriever.py
+│   ├── fact_memory.py
+│   └── turn_memory.py
+├── persona/
+│   ├── mood_adjustments.json
+│   ├── relationship_status.py
+│   ├── mood_tracker.py
+│   ├── hormone_adjuster.py
+│   ├── hormone_api.py
+│   ├── emotion_nsfw_checker.py
+│   ├── update_tiny_model_state.py
+│   ├── tiny_model_writer.py
+│   ├── update_faiss_memory_state.py
+│   ├── faiss_memory_writer.py
+│   ├── persona.json
+│   └── personality.json
+└── utils/
+    ├── __pycache__/
+    ├── session_id.py
+    └── ui_helpers.py
+
+---------------------------------------------------------
+# app.py (Updated: Show FAISS-based final prompt instead of LLM output)
+import streamlit as st
+import json
+from pathlib import Path
+
+from config.constants import MAX_TURNS, TOP_K  # TOP_K = 2
+from core.fact_extractor import store_fact, load_facts
+from memory.turn_memory import dump_turn, load_memory
+from memory.context_retriever import retrieve_relevant_context
+from utils.ui_helpers import render_message
+
+# 🌟 Streamlit app setup
+st.set_page_config(page_title="Web", layout="wide")
+st.title("🧠 Your Memory-Based AI Agent (FAISS Test Mode)")
+
+# 🧠 Initialize session memory
+if "turns" not in st.session_state:
+    st.session_state.turns = [{"role": "system", "content": ""}]  # Start with empty system
+
+# 📦 Load memory from file and append to session state (skip if already loaded)
+if len(st.session_state.turns) == 1:
+    raw_turns = load_memory()
+    for rt in raw_turns:
+        st.session_state.turns.append({"role": "user", "content": rt["user"]})
+        st.session_state.turns.append({"role": "assistant", "content": rt["assistant"]})
+
+# 🔁 Load facts and update system prompt on startup
+facts = load_facts()
+facts_block = "\n".join(f"- {fact}" for fact in facts) if facts else "- (none yet)"
+system_prompt = (
+    "You are Mythalion, a helpful and creative assistant.\n"
+    "Permanent facts provided by the user:\n"
+    f"{facts_block}"
+)
+st.session_state.turns[0] = {"role": "system", "content": system_prompt}
+
+# 🪄 Show conversation history (skip system prompt for display)
+for msg in st.session_state.turns[1:]:
+    render_message(msg)
+
+# 📥 Chat input
+if user_msg := st.chat_input("Type your message…"):
+    # Append user message
+    st.session_state.turns.append({"role": "user", "content": user_msg})
+    with st.chat_message("user"):
+        st.markdown(user_msg)
+
+    # 🔍 Detect and store facts from user input
+    store_fact(user_msg)
+
+    # 🔁 Reload facts and update system prompt
+    facts = load_facts()
+    facts_block = "\n".join(f"- {fact}" for fact in facts) if facts else "- (none yet)"
+    system_prompt = (
+        "You are Mythalion, a helpful and creative assistant.\n"
+        "Permanent facts provided by the user:\n"
+        f"{facts_block}"
+    )
+    st.session_state.turns[0] = {"role": "system", "content": system_prompt}
+
+    try:
+        # 🧠 Retrieve top memory snippets from FAISS
+        top_memories = get_relevant_memory(user_msg, k=TOP_K)
+        memory_prompt = "\n\n".join(
+            f"User: {mem['user']}\nAssistant: {mem['assistant']}" for mem in top_memories
+        )
+        final_prompt = f"{memory_prompt}\n\nUser: {user_msg}\nAssistant:"
+
+        # 🔍 Show the final prompt (instead of calling LLM)
+        with st.chat_message("assistant"):
+            st.markdown("### 🤖 Final Prompt to LLM (FAISS Based)")
+            st.code(final_prompt, language="markdown")
+
+        # ⛔ Skip LLM call; save turn manually
+        st.session_state.turns.append({"role": "assistant", "content": final_prompt})
+        dump_turn({"user": user_msg, "assistant": final_prompt})
+
+    except Exception as e:
+        st.error(f"❌ Error building prompt: {e}")
+
+-----------------------------------------------------------------
+# fake_llm.py
+def fake_llm(prompt: str) -> str:
+    print("\n🧪  Mock LLM prompt\n", prompt)
+    return "🧠 [Stubbed LLM response — OK for tests]"
+
+__all__ = ["fake_llm"]
+
+-----------------------------------------------------------------
+flow.py
+"""
+LangGraph flow definition using a FAISS retriever and fake LLM.
+"""
+
+from typing import Annotated, TypedDict, Literal
+
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langchain_core.messages import HumanMessage, AIMessage
+
+from fake_llm import fake_llm
+from vectorstore import build_store
+
+# 1. Shared state structure
+class GraphState(TypedDict):
+    messages: Annotated[list, add_messages]
+    context: str
+
+# 2. Setup FAISS retriever
+vs_retriever = build_store().as_retriever(search_kwargs={"k": 3})
+
+# 3. Node: retrieve context using the last user message
+def retrieve_context(state: GraphState) -> GraphState:
+    user_msg = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    question = user_msg.content
+    docs = vs_retriever.invoke(question)
+    context_str = "\n".join(d.page_content for d in docs)
+    return {
+        "messages": state["messages"],
+        "context": context_str
+    }
+
+# 4. Node: generate assistant reply using retrieved context
+def generate_reply(state: GraphState) -> GraphState:
+    user_msg = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    context = state.get("context", "")
+    prompt = f"Context:\n{context}\nUser:\n{user_msg.content}"
+    ai_reply = fake_llm(prompt)
+    return {
+        "messages": state["messages"] + [AIMessage(content=ai_reply)],
+        "context": context
+    }
+
+# Transition decision
+def _decide(state: GraphState) -> Literal["respond"]:
+    return "respond"
+
+# Graph builder
+def build_graph():
+    g = StateGraph(GraphState)
+    g.add_node("retrieve", retrieve_context)
+    g.add_node("respond", generate_reply)
+
+    g.add_conditional_edges("retrieve", _decide, {"respond": "respond"})
+    g.add_conditional_edges("respond", lambda *_: END, {END: END})
+
+    g.set_entry_point("retrieve")
+    return g.compile()
+
+__all__ = ["build_graph"]
+
+-----------------------------------------------------------------
+# run.py
+"""
+Manual smoke-test for the LangGraph pipeline.
+"""
+
+from flow import build_graph
+from langchain_core.messages import HumanMessage
+
+if __name__ == "__main__":
+    graph = build_graph()
+    # Graph expects state: {"messages": [...]}
+    result = graph.invoke({"messages": [HumanMessage("Blue")]})
+    print("\nFinal assistant message:\n", result["messages"][-1].content)
+
+-----------------------------------------------------------------
+#vectorstore.py
+import json
+import numpy as np
+from pathlib import Path
+from langchain_community.vectorstores import FAISS
+from langchain_core.embeddings import Embeddings
+from langchain_core.documents import Document
+from sentence_transformers import SentenceTransformer
+from config.constants import MEMORY_FILE
+
+
+# Load BGE-M3 model
+_bge_model = SentenceTransformer("BAAI/bge-m3")
+
+def _bge_embed(texts: list[str]) -> list[list[float]]:
+    return _bge_model.encode(texts, normalize_embeddings=True)
+
+class BGEEmbeddings(Embeddings):
+    def embed_documents(self, texts):
+        return _bge_embed([f"passage: {t}" for t in texts])
+
+    def embed_query(self, text):
+        return _bge_embed([f"query: {text}"])[0]
+
+def load_docs_from_memory_json():
+    docs = []
+    with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line.strip())
+                turn = item.get("turn", {})
+                user = turn.get("user", "")
+                assistant = turn.get("assistant", "")
+                if user or assistant:
+                    text = f"User: {user}\nAssistant: {assistant}"
+                    docs.append(Document(page_content=text))
+            except json.JSONDecodeError as e:
+                print(f"⚠️ Skipping bad line in memory.json: {e}")
+    return docs
+
+def build_store():
+    embeddings = BGEEmbeddings()
+    memory_docs = load_docs_from_memory_json()
+    store = FAISS.from_documents(memory_docs, embedding=embeddings)
+
+    # Optional: log top-4 matches to sanity check
+    query = "Explain LangGraph"
+    scores, indices = store.index.search(
+        np.array([embeddings.embed_query(query)]), k=4
+    )
+    print("\n🔍 FAISS Scores:")
+    for i, idx in enumerate(indices[0]):
+        print(f"{i+1}. {memory_docs[idx].page_content[:80]}... (score: {scores[0][i]:.4f})")
+
+    return store
+
+__all__ = ["build_store"]
+
+-----------------------------------------------------------------
+constants.py
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# 🔐 API-related constants
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+BASE_URL = "https://openrouter.ai/api/v1"
+MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+MAX_TURNS = 6
+
+# 📚 FAISS-related constants
+TOP_K = 3           # Number of relevant chunks to retrieve
+VECTOR_DIM = 768    # Depends on the model (e.g., BGE-M3)
+MEMORY_FILE = Path("data/memory.json")  # Path to persistent FAISS memory
+
+# 🔥 Safety check
+if not API_KEY:
+    raise EnvironmentError("Missing OPENROUTER_API_KEY in .env")
+
+-----------------------------------------------------------------
+# core/api_client.py (Unchanged)
+import requests
+from config.constants import API_KEY, BASE_URL, MODEL
+
+def get_completion(messages, temperature=0.3, top_p=0.8, max_tokens=512):
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openrouter.ai",
+        "X-Title": "Streamlit-Mythalion",
+    }
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=300,
+    )
+    if response.status_code != 200:
+        print("OpenRouter Error:", response.text)
+        raise Exception(f"OpenRouter Error: {response.status_code} - {response.text}")
+
+    return response.json()["choices"][0]["message"]["content"]
+
+
+-----------------------------------------------------------------
+# core/context_assembler.py
+
+from memory.turn_memory import load_memory
+from memory.context_retriever import retrieve_relevant_context
+
+def build_prompt_with_context(user_input: str) -> str:
+    history = load_memory()
+    user_turns = [turn["user"] for turn in history]
+
+    relevant_entries = retrieve_relevant_context(user_input, user_turns)
+
+    context_block = "\n".join(f"- {entry}" for entry in relevant_entries)
+    final_prompt = f"Relevant memory:\n{context_block}\n\nUser:\n{user_input}"
+    return final_prompt
+
+-----------------------------------------------------------------
+# core/fact_extractor.py (Updated: Merged is_probable_fact from fact_memory.py; kept naive extraction but gated by probability check; added try-except for robustness)
+import json
+from pathlib import Path
+
+FACTS_PATH = Path("data/facts.json")
+
+def load_facts() -> list[str]:
+    if not FACTS_PATH.exists():
+        return []
+    try:
+        with open(FACTS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[Fact Load Error]: {e}")
+        return []
+
+def save_facts(new_facts: list[str]):
+    existing = load_facts()
+    combined = list(set(existing + new_facts))  # Deduplicate
+    try:
+        with open(FACTS_PATH, "w", encoding="utf-8") as f:
+            json.dump(combined, f, indent=2)
+    except Exception as e:
+        print(f"[Fact Save Error]: {e}")
+
+def is_probable_fact(text: str) -> bool:
+    keywords = ["remember", "my name is", "call me", "i live", "i am from", "i work at", "i like", "i love"]
+    return any(kw in text.lower() for kw in keywords)
+
+def store_fact(text: str):
+    """
+    Extract and store facts if probable. Combines naive check with keyword detection.
+    """
+    fact_candidate = text.strip()
+    if (
+        len(fact_candidate) > 10
+        and not fact_candidate.endswith("?")
+        and not fact_candidate.lower().startswith("what")
+        and is_probable_fact(fact_candidate)
+    ):
+        save_facts([fact_candidate])
+
+-----------------------------------------------------------------
+# core/context_retriever.py (add at BOTTOM or as new utility)
+from memory.turn_memory import load_memory
+from memory.long_term_memory import load_long_term_memory
+
+def retrieve_top_memories(user_query: str, k_short=2, k_long=2, user_id=None, score_threshold=0.35):
+    # --- Short-term memory retrieval ---
+    turns = load_memory()
+    short_texts = [f"User: {t['user']}\nAssistant: {t['assistant']}" for t in turns if t.get("user")]
+    # returns: ["User: ...\nAssistant: ...", ...]
+    short_matches = []
+    if short_texts:
+        store = load_faiss_index(short_texts)
+        D, I = store.index.search(np.array([BGEEmbeddings().embed_query(user_query)]), k=k_short)
+        # Only inject if score >= threshold (FAISS returns squared L2 distance, lower=closer)
+        for idx, score in zip(I[0], D[0]):
+            if idx >= 0 and score <= score_threshold:  # For cosine, can adjust threshold
+                short_matches.append(short_texts[idx])
+
+    # --- Long-term memory retrieval ---
+    summaries = [e.get("summary", "") for e in load_long_term_memory(user_id)]
+    long_matches = []
+    if summaries:
+        store = load_faiss_index(summaries)
+        D, I = store.index.search(np.array([BGEEmbeddings().embed_query(user_query)]), k=k_long)
+        for idx, score in zip(I[0], D[0]):
+            if idx >= 0 and score <= score_threshold:
+                long_matches.append(summaries[idx])
+
+    # --- Compose block, only inject top N from each ---
+    return short_matches[:k_short] + long_matches[:k_long]
+
+
+-----------------------------------------------------------------
+import json, datetime
+from pathlib import Path
+from typing import List
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+FACTS_FILE = DATA_DIR / "facts.jsonl"
+
+def save_fact(text: str) -> None:
+    entry = {
+        "timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+        "fact": text.strip(),
+    }
+    with FACTS_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+def load_facts() -> List[str]:
+    if not FACTS_FILE.exists():
+        return []
+    try:
+        return [
+            json.loads(line)["fact"]
+            for line in FACTS_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except Exception as e:
+        print(f"[Fact Load Error]: {e}")
+        return []
+
+def is_probable_fact(text: str) -> bool:
+    keywords = ["remember", "my name is", "call me", "i live", "i am from", "i work at", "i like", "i love"]
+    return any(kw in text.lower() for kw in keywords)
+
+def store_fact(user_input: str):
+    if is_probable_fact(user_input):
+        save_fact(user_input.strip())
+
+-----------------------------------------------------------------
+# memory/turn_memory.py (Unchanged, but now properly used in app.py)
+import json, datetime
+from pathlib import Path
+from typing import Dict, List
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+CHAT_FILE = DATA_DIR / "memory.jsonl"
+
+def dump_turn(turn: Dict[str, str]) -> None:
+    """
+    Save a user/assistant turn pair into memory.jsonl with timestamp.
+    """
+    entry = {
+        "timestamp": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+        "turn": turn,
+    }
+    with CHAT_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+def load_memory() -> List[Dict[str, str]]:
+    if not CHAT_FILE.exists():
+        return []
+    try:
+        return [
+            json.loads(line)["turn"]
+            for line in CHAT_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except Exception as e:
+        print(f"[Memory Load Error]: {e}")
+        return []
+
+-----------------------------------------------------------------
+# utils/ui_helpers.py (Updated: Renamed to render_message, adjusted to handle single messages without skipping system)
+import streamlit as st
+
+def render_message(msg):
+    role = msg["role"]
+    label = "User:" if role == "user" else "Assistant:" if role == "assistant" else "System:"
+    with st.chat_message(role):
+        st.markdown(f"**{label}** {msg['content']}")
+--------------------------------------------------------------------
+# memory/session_summarizer.py
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+from core.api_client import get_completion
+from memory.long_term_memory import append_long_term_memory
+
+LONG_TERM_MEM_FILE = Path("data/long_term_memory.jsonl")
+
+def summarize_session(user_id: str, session_history: List[Dict[str, str]]) -> Dict[str, Any]:
+    """
+    Summarize the whole session (list of turn dicts with 'user' and 'assistant') using LLM.
+    Return a structured summary dict to save and index.
+    """
+    # Build prompt for summarization
+    raw_text = "\n".join(
+        f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+        for turn in session_history
+    )
+    prompt = (
+        "You are a memory summarizer.\n"
+        "Summarize this conversation into key user traits, preferences, facts, "
+        "and relationship notes as JSON with keys: summary, topics, trust_level.\n"
+        "Conversation:\n"
+        f"{raw_text}\n"
+        "Output ONLY the JSON."
+    )
+
+    # Call your LLM API client
+    response = get_completion([{"role": "system", "content": prompt}])
+
+    # Parse JSON from response safely
+    try:
+        summary = json.loads(response)
+    except json.JSONDecodeError:
+        summary = {
+            "summary": "No summary available due to parse error.",
+            "topics": [],
+            "trust_level": "unknown"
+        }
+
+    # Save the summary to long_term_memory.jsonl with metadata
+    entry = {
+        "user_id": user_id,
+        "timestamp": json.dumps(__import__('datetime').datetime.utcnow().isoformat()),
+        "summary": summary.get("summary", ""),
+        "topics": summary.get("topics", []),
+        "trust_level": summary.get("trust_level", "unknown"),
+    }
+    append_long_term_memory(entry)
+    return entry
+--------------------------------------------------------------
+# memory/long_term_memory.py
+import json
+from pathlib import Path
+from typing import Dict, List, Any
+
+LONG_TERM_FILE = Path("data/long_term_memory.jsonl")
+
+def append_long_term_memory(entry: Dict[str, Any]) -> None:
+    with LONG_TERM_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+def load_long_term_memory(user_id: str = None) -> List[Dict[str, Any]]:
+    if not LONG_TERM_FILE.exists():
+        return []
+    results = []
+    with LONG_TERM_FILE.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                data = json.loads(line)
+                if user_id is None or data.get("user_id") == user_id:
+                    results.append(data)
+    return results
+-----------------------------------------------------------------
+# persona/relationship_status.py
+import json
+from pathlib import Path
+
+RELATIONSHIP_FILE = Path("data/relationship_status.json")
+
+DEFAULT_STATUS = {
+    "trust_level": "medium",
+    "preferred_tone": "witty",
+    "interaction_style": "light teasing",
+    "last_interaction": None
+}
+
+def get_relationship_status(user_id: str) -> dict:
+    if not RELATIONSHIP_FILE.exists():
+        return DEFAULT_STATUS
+    try:
+        data = json.loads(RELATIONSHIP_FILE.read_text())
+        return data.get(user_id, DEFAULT_STATUS)
+    except Exception:
+        return DEFAULT_STATUS
+
+def update_relationship_status(user_id: str, status: dict) -> None:
+    data = {}
+    if RELATIONSHIP_FILE.exists():
+        try:
+            data = json.loads(RELATIONSHIP_FILE.read_text())
+        except Exception:
+            data = {}
+    data[user_id] = status
+    with RELATIONSHIP_FILE.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+-------------------------------------------------------------
+# core/context_block_builder.py
+#Central prompt block builder for session init and turn-based contexts.
+from typing import List, Dict
+from persona.relationship_status import get_relationship_status
+from persona.mood_tracker import get_current_mood
+from memory.long_term_memory import load_long_term_memory
+from memory.context_retriever import retrieve_relevant_context
+
+def build_session_init_block(user_id: str, persona_info: dict, personality_info: dict) -> str:
+    relationship = get_relationship_status(user_id)
+    long_term_memories = load_long_term_memory(user_id=user_id)
+    memories_text = "\n".join(
+        f"- {mem.get('summary','')}" for mem in long_term_memories[-5:]
+    ) or "- (none yet)"
+
+    block = (
+        "[PERSONA INFO]\n"
+        + "\n".join(f"{k}: {v}" for k, v in persona_info.items())
+        + "\n\n[PERSONALITY]\n"
+        + "\n".join(f"{k}: {v}" for k, v in personality_info.items())
+        + "\n\n[RELATIONSHIP STATUS]\n"
+        + f"Trust level: {relationship.get('trust_level', 'unknown')}\n"
+        + f"Preferred tone: {relationship.get('preferred_tone', 'neutral')}\n"
+        + f"Interaction style: {relationship.get('interaction_style', 'neutral')}\n\n"
+        + "[LONG-TERM MEMORIES]\n"
+        + memories_text
+        + "\n\n→ [END INIT BLOCK]"
+    )
+    return block
+
+def build_turn_block(user_input: str, user_id: str = None) -> str:
+    mood_info = get_current_mood(user_id)
+    # Fetch relevant short-term context
+    # Here, you would replace 'texts' with your recent short-term chat texts loaded from memory
+    from memory.turn_memory import load_memory
+
+    recent_turns = load_memory()
+    user_turns = [turn["user"] for turn in recent_turns]
+    relevant_memories = retrieve_relevant_context(user_input, user_turns)
+    relevant_text = "\n\n".join(relevant_memories) if relevant_memories else "- (none)"
+
+    block = (
+        "[MINDSET]\n"
+        f"Current Mood: {mood_info.get('mood', 'neutral')} "
+        f"(Intensity: {mood_info.get('intensity', 0)})\n"
+        f"Tone: {mood_info.get('tone', 'neutral')}\n"
+        f"Style: {mood_info.get('style', 'neutral')}\n"
+        f"Formality: {mood_info.get('formality', 'neutral')}\n\n"
+        "[RELEVANT MEMORY]\n"
+        f"{relevant_text}\n\n"
+        f"User: {user_input}\n\n→ [GENERATE RESPONSE TO LAST USER MESSAGE]"
+    )
+    return block
+-------------------------------------------------
+# persona/mood_tracker.py
+
+def get_current_mood(user_id: str = None) -> dict:
+    """
+    Stub: In real system, infer from recent messages using sentiment analysis or heuristics.
+    Return dict with keys: mood, intensity, tone, style, formality
+    """
+    # Example fixed mood for now:
+    return {
+        "mood": "playful",
+        "intensity": 0.7,
+        "tone": "witty",
+        "style": "conversational",
+        "formality": "casual",
+    }
+------------------------------------------------

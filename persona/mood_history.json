@@ -1,0 +1,77 @@
+[
+  {
+    "timestamp": "2025-07-28T09:10:56.823676",
+    "mood": "neutral",
+    "intensity": 0.5,
+    "reason": "contextual_analysis",
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_snapshot": {
+      "dopamine": 0.4591346968412399,
+      "serotonin": 0.4673077574729919,
+      "cortisol": 0.58,
+      "oxytocin": 0.5
+    }
+  },
+  {
+    "timestamp": "2025-07-28T09:11:47.309063",
+    "mood": "neutral",
+    "intensity": 0.5,
+    "reason": "contextual_analysis",
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_snapshot": {
+      "dopamine": 0.4523312659967306,
+      "serotonin": 0.46180887945125176,
+      "cortisol": 0.5955218917338068,
+      "oxytocin": 0.5
+    }
+  },
+  {
+    "timestamp": "2025-07-28T09:12:00.426126",
+    "mood": "neutral",
+    "intensity": 0.5,
+    "reason": "contextual_analysis",
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_snapshot": {
+      "dopamine": 0.5117605053175036,
+      "serotonin": 0.49940022003246015,
+      "cortisol": 0.5955218917338068,
+      "oxytocin": 0.58
+    }
+  },
+  {
+    "timestamp": "2025-07-28T09:12:11.381456",
+    "mood": "stressed",
+    "intensity": 0.1996221481528336,
+    "reason": "contextual_analysis",
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_snapshot": {
+      "dopamine": 0.4714580597907052,
+      "serotonin": 0.4667202700356567,
+      "cortisol": 0.6663517901273613,
+      "oxytocin": 0.58
+    }
+  },
+  {
+    "timestamp": "2025-07-28T09:13:21.239471",
+    "mood": "stressed",
+    "intensity": 0.2708022171209082,
+    "reason": "contextual_analysis",
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_snapshot": {
+      "dopamine": 0.4416361519592586,
+      "serotonin": 0.4430031925184427,
+      "cortisol": 0.7256685142674235,
+      "oxytocin": 0.58
+    }
+  }
+]

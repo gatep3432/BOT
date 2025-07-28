@@ -1,0 +1,24 @@
+{
+  "current_mood": "stressed",
+  "intensity": 0.2708022171209082,
+  "context": {
+    "is_hybrid": false,
+    "is_emergent": false,
+    "stability": "high",
+    "hormone_variance": 0.015995313288219695,
+    "all_mood_scores": {
+      "cheerful": 0.44204626412701387,
+      "anxious": 0.44804396582616124,
+      "affectionate": 0.522,
+      "depressed": 0.21389951230123275,
+      "excited": 0.4984426244208916,
+      "melancholic": -0.26552850739922884,
+      "energetic": 0.44218296818293223,
+      "contemplative": -0.012232745097951886,
+      "restless": 0.49532510272148933,
+      "serene": 0.06413514830778477,
+      "neutral": 1.0951539293725625
+    }
+  },
+  "last_updated": "2025-07-28T09:13:21.226304"
+}
